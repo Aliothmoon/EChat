@@ -6,5 +6,7 @@ set(CMAKE_CXX_STANDARD 14)
 add_executable(server server.cpp map/SyncMap.h map/SyncMap.cpp
         executor/pool.cpp executor/pool.h
         queue/SyncQueue.cpp queue/SyncQueue.h
+        poller/poller.cpp poller/poller.h
 )
-add_executable(client client.cpp)
+add_executable(client client.cpp
+        poller/poller.h)

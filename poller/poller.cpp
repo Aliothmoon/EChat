@@ -1,22 +1,19 @@
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/epoll.h>
-#include <sys/socket.h>
-#include <cstdio>
-#include<algorithm>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <vector>
-#include <cstring>
-#include <memory>
+
+#include "poller.h"
+
+void setNonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0)
+        return;
+    if (fcntl(fd, F_SETFL, flags |= O_NONBLOCK) < 0)
+        perror("fcntl set");
+}
 
 
-using EventList = std::vector<struct epoll_event>;
-
-int initialization() {
-//    Socket
-    int listenFd = socket(AF_INET, SOCK_STREAM, 0);
-    if (listenFd < 0) {
+int EndPoint::Init() {
+    //    Socket
+    auto fd = this->lfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
         perror("socket");
         return -1;
     }
@@ -30,62 +27,48 @@ int initialization() {
     addr.sin_addr.s_addr = inet_addr("0.0.0.0");
 
 // Bind
-    if (bind(listenFd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+    if (bind(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
         perror("bind");
         return -2;
     }
 //    Listen
-    if (listen(listenFd, 20) < 0) {
+    if (listen(fd, 20) < 0) {
         perror("listen");
         return -3;
     }
-    return listenFd;
+    return 0;
 }
 
-void acceptor() {
-
-}
-
-void poll() {
-}
-
-void setNonblocking(int fd) {
-    int flags = fcntl(fd, F_GETFL);
-    if (flags < 0)
-        return;
-    if (fcntl(fd, F_SETFL, flags |= O_NONBLOCK) < 0)
-        perror("fcntl set");
-}
-
-
-int process() {
-    auto lfd = initialization();
-    if (lfd < 0) {
-        return lfd;
+int EndPoint::Accept() {
+    auto conn = accept(lfd, (sockaddr *) &current, &currentLen);
+    if (conn < 0) {
+        perror("accept");
+        return -4;
     }
-//    连接管理
-    std::vector<int> clients;
 
-//    连接信息
-    sockaddr_in connaddr{};
-    socklen_t len = sizeof(connaddr);
+//    char strip[64] = {0};
+//    char *ip = inet_ntoa(addr.sin_addr);
+//    strcpy(strip, ip);
+//    printf("client connect, conn:%d,ip:%s, port:%d, count:%d\n", conn, strip, ntohs(connaddr.sin_port),
+//           ++count);
 
-    auto efd = epoll_create1(0);
-    epoll_event event{};
+    clients.push_back(conn);
+    // 设为非阻塞
+    setNonblocking(conn);
+    // add fd in events
+    event.data.fd = conn;
     event.events = EPOLLIN;
-    event.data.fd = lfd;
-    if (epoll_ctl(efd, EPOLL_CTL_ADD, lfd, &event) < 0) {
-        perror("epoll_ctl");
-        return -2;
-    }
-    EventList events{16};
-    int count = 0;
-    while (true) {
+    epoll_ctl(efd, EPOLL_CTL_ADD, conn, &event);
+    return conn;
+}
+
+void EndPoint::Poll() {
+    while (running) {
 
         auto readyNum = epoll_wait(efd, events.begin().base(), (int) events.size(), -1);
         if (readyNum == -1) {
             perror("epoll_wait");
-            return -3;
+            continue;
         }
         // 对clients进行扩容
         if ((size_t) readyNum == events.size()) {
@@ -94,25 +77,11 @@ int process() {
         for (int i = 0; i < readyNum; i++) {
             int conn;
             if (events[i].data.fd == lfd) {
-                conn = accept(lfd, (struct sockaddr *) &connaddr, &len);
-                if (conn < 0) {
-                    perror("accept");
-                    return -4;
+                auto ret = Accept();
+                if (ret < 0) {
+                    perror("Accept");
+                    return;
                 }
-                char strip[64] = {0};
-                char *ip = inet_ntoa(connaddr.sin_addr);
-                strcpy(strip, ip);
-                printf("client connect, conn:%d,ip:%s, port:%d, count:%d\n", conn, strip, ntohs(connaddr.sin_port),
-                       ++count);
-
-                clients.push_back(conn);
-                // 设为非阻塞
-                setNonblocking(conn);
-                // add fd in events
-                event.data.fd = conn;
-                event.events = EPOLLIN;
-                epoll_ctl(efd, EPOLL_CTL_ADD, conn, &event);
-
             } else if (events[i].events & EPOLLIN) {
                 conn = events[i].data.fd;
                 if (conn < 0)
@@ -124,9 +93,9 @@ int process() {
                 printf("Read %ld\n", ret);
                 if (ret == -1) {
                     perror("read");
-                    return -5;
+                    continue;
                 } else if (ret == 0) {
-                    printf("client close remove:%d, count:%d\n", conn, --count);
+//                    printf("client close remove:%d, count:%d\n", conn, --count);
                     close(conn);
                     event = events[i];
                     epoll_ctl(efd, EPOLL_CTL_DEL, conn, &event);
@@ -137,10 +106,37 @@ int process() {
             }
         }
     }
+}
 
+int EndPoint::PreProcess() {
+
+    if (lfd < 0) {
+        printf("FD not init");
+        return -1;
+    }
+
+    this->efd = epoll_create1(0);
+    event.events = EPOLLIN;
+    event.data.fd = lfd;
+    if (epoll_ctl(efd, EPOLL_CTL_ADD, lfd, &event) < 0) {
+        perror("epoll_ctl");
+        return -2;
+    }
     return 0;
 }
 
-int main() {
-    process();
+void EndPoint::Run() {
+    Init();
+    auto rt = PreProcess();
+    if (rt < 0) {
+        perror("PreProcess");
+        return;
+    }
+    Poll();
+
+
+}
+
+void EndPoint::Shutdown() {
+
 }
