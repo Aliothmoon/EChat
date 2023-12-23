@@ -1,5 +1,7 @@
 
+#include <iostream>
 #include "poller.h"
+#include "../list/list.h"
 
 void setNonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL);
@@ -18,13 +20,13 @@ int EndPoint::Init() {
         return -1;
     }
 
-    unsigned short sport = 8080;
+    unsigned short sport = port;
 
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    printf("port = %d\n", sport);
+    printf("Address : %s:%d\n", address, sport);
     addr.sin_port = htons(sport);
-    addr.sin_addr.s_addr = inet_addr("0.0.0.0");
+    addr.sin_addr.s_addr = inet_addr(address);
 
 // Bind
     if (bind(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
@@ -36,6 +38,9 @@ int EndPoint::Init() {
         perror("listen");
         return -3;
     }
+
+    running = true;
+
     return 0;
 }
 
@@ -46,14 +51,17 @@ int EndPoint::Accept() {
         return -4;
     }
 
-//    char strip[64] = {0};
-//    char *ip = inet_ntoa(addr.sin_addr);
-//    strcpy(strip, ip);
-//    printf("client connect, conn:%d,ip:%s, port:%d, count:%d\n", conn, strip, ntohs(connaddr.sin_port),
-//           ++count);
+    char strip[64] = {0};
+    char *ip = inet_ntoa(current.sin_addr);
+    strcpy(strip, ip);
+    printf("Client connect, conn:%d,ip:%s, port:%d\n", conn, strip, ntohs(current.sin_port));
+
+    char buf[512] = {0};
+    sprintf(buf, "Welcome to EChat: %d\n", conn);
+    send(conn, buf, strlen(buf), MSG_DONTWAIT);
 
     clients.push_back(conn);
-    // 设为非阻塞
+    // setNonblocking fd
     setNonblocking(conn);
     // add fd in events
     event.data.fd = conn;
@@ -75,34 +83,17 @@ void EndPoint::Poll() {
             events.resize(events.size() * 2);
         }
         for (int i = 0; i < readyNum; i++) {
-            int conn;
             if (events[i].data.fd == lfd) {
+//                处理连接事件
                 auto ret = Accept();
                 if (ret < 0) {
                     perror("Accept");
-                    return;
+                    continue;
                 }
             } else if (events[i].events & EPOLLIN) {
-                conn = events[i].data.fd;
-                if (conn < 0)
-                    continue;
-                char buf[1];
-//                std::unique_ptr<char> &&ptr = std::make_unique<char>(100);
-                auto ret = recv(conn, buf, sizeof(buf), MSG_DONTWAIT);
 
-                printf("Read %ld\n", ret);
-                if (ret == -1) {
-                    perror("read");
-                    continue;
-                } else if (ret == 0) {
-//                    printf("client close remove:%d, count:%d\n", conn, --count);
-                    close(conn);
-                    event = events[i];
-                    epoll_ctl(efd, EPOLL_CTL_DEL, conn, &event);
-                    clients.erase(std::remove(clients.begin(), clients.end(), conn), clients.end());
-                }
-                write(conn, buf, ret);
-                memset(buf, 0, sizeof(buf));
+                Process(events[i]);
+//                处理 读事件
             }
         }
     }
@@ -126,9 +117,13 @@ int EndPoint::PreProcess() {
 }
 
 void EndPoint::Run() {
-    Init();
-    auto rt = PreProcess();
-    if (rt < 0) {
+    auto status = Init();
+    if (status < 0) {
+        perror("Init");
+        return;
+    }
+    status = PreProcess();
+    if (status < 0) {
         perror("PreProcess");
         return;
     }
@@ -137,6 +132,41 @@ void EndPoint::Run() {
 
 }
 
-void EndPoint::Shutdown() {
+void EndPoint::Process(EPOLL_EVENT &ev) {
+    int conn = ev.data.fd;
+    if (conn < 0)
+        return;
+
+    char buf[2048] = {0};
+    auto len = recv(conn, buf, sizeof buf, MSG_DONTWAIT);
+    if (len == -1) {
+        perror("read");
+        return;
+    } else if (len == 0) {
+        printf("Client close :%d\n", conn);
+        close(conn);
+        epoll_ctl(efd, EPOLL_CTL_DEL, conn, &ev);
+        clients.erase(std::remove(clients.begin(), clients.end(), conn), clients.end());
+    } else {
+        for (const auto &item: clients) {
+            if (item != conn) {
+                char head[10] = {0}, real[2048 + 10] = {0};
+                sprintf(head, "%d:", conn);
+                auto sz = strlen(strcpy(real, head));
+                strcpy(real + sz, buf);
+                printf("Send %d -> %d %s", conn, item, real);
+                std::cout << std::endl;
+                send(item, real, strlen(real), MSG_DONTWAIT);
+            }
+        }
+    }
+
 
 }
+
+void EndPoint::Shutdown() {
+    this->running = false;
+    pool.shutdown();
+}
+
+

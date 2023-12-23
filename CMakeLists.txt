@@ -3,10 +3,10 @@ project(EChat)
 
 set(CMAKE_CXX_STANDARD 14)
 
-add_executable(server server.cpp map/SyncMap.h map/SyncMap.cpp
+add_executable(server server.cpp map/SyncMap.h
         executor/pool.cpp executor/pool.h
         queue/SyncQueue.cpp queue/SyncQueue.h
         poller/poller.cpp poller/poller.h
+        handler/user.h list/list.h
 )
-add_executable(client client.cpp
-        poller/poller.h)
+add_executable(client client.cpp)

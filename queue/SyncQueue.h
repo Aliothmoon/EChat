@@ -6,6 +6,7 @@
 #define ECHAT_SYNCQUEUE_H
 
 #include <queue>
+#include <list>
 
 template<typename T>
 class SyncQueue {

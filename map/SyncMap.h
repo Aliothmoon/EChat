@@ -3,7 +3,6 @@
 #ifndef ECHAT_SYNCMAP_H
 #define ECHAT_SYNCMAP_H
 
-#include <vector>
 #include <map>
 #include <mutex>
 #include <vector>
@@ -11,22 +10,53 @@
 
 template<typename K, typename V>
 class SyncMap {
-    SyncMap();
+public:
+    SyncMap() = default;
 
-    SyncMap(std::initializer_list<std::pair<K, V>> init_list);
+    SyncMap(std::initializer_list<std::pair<K, V>> init_list) {
+        for (auto &pair: init_list) {
+            map_[pair.first] = pair.second;
+        }
+    }
 
-    V &operator[](const K &key);
+    V &operator[](const K &key) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return map_[key];
+    }
 
-    std::vector<K> keys() const;
+    bool insert(const K &key, const V &value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto result = map_.insert(std::make_pair(key, value));
+        return result.second;
+    }
 
-    size_t size() const;
+    bool erase(const K &key) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return map_.erase(key);
+    }
 
-    bool contains(const K &key) const;
+    bool contains(const K &key) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return map_.find(key) != map_.end();
+    }
 
-    bool insert(const K &key, const V &value);
+    size_t size() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return map_.size();
+    }
 
-    bool erase(const K &key);
+    std::vector<K> keys() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<K> result;
+        for (auto &pair: map_) {
+            result.push_back(pair.first);
+        }
+        return result;
+    }
 
+private:
+    std::map<K, V> map_;
+    mutable std::mutex mutex_;
 };
 
 
